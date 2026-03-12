@@ -24,6 +24,7 @@
      * Strip scripts and other heavy tags to prevent 404s and execution during parsing
      */
     function cleanHTML(html) {
+        if (!html) return '';
         return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
                    .replace(/<link\b[^>]*>/gi, "")
                    .replace(/<img\b[^>]*>/gi, "");
@@ -31,16 +32,15 @@
 
     function Uakino(object) {
         var network = new Lampa.Reguest();
-        var scroll = new Lampa.Scroll({mask: true, over: true, scroll_by_item: true});
-        var items = [];
-        var html = $('<div></div>');
-        var active = 0;
         var extract_file_regex = /file\s*:\s*["']([^"']+?)["']/g;
         var extract_subs_regex = /subtitle\s*:\s*["']([^"']+?)["']/g;
+        var _this = this;
         var episodes = [];
 
+        // Inherit from InteractionMain to handle scrolling and list logic
+        Lampa.InteractionMain.call(this, object);
+
         this.create = function () {
-            var _this = this;
             this.activity.loader(true);
 
             var url = mainUrl + '/ua/';
@@ -78,7 +78,6 @@
         };
 
         this.load = function (url) {
-            var _this = this;
             network.silent(getProxy(url), function (html_str) {
                 var id = url.split('/').pop().split('-')[0];
                 var is_serial = url.match(/(\/anime-series)|(\/seriesss)|(\/cartoonseries)/);
@@ -86,7 +85,7 @@
                 if (is_serial) {
                     var playlistUrl = mainUrl + '/engine/ajax/playlists.php?news_id=' + id + '&xfield=playlist&time=' + Date.now();
                     network.silent(getProxy(playlistUrl), function (json) {
-                        if (json && json.success) {
+                        if (json && json.success && json.response) {
                             var eps_dom = $('<div>' + json.response + '</div>');
                             episodes = [];
                             eps_dom.find('div.playlists-videos li').each(function () {
@@ -97,7 +96,8 @@
                                     voice: el.attr('data-voice')
                                 });
                             });
-                            _this.build();
+                            if (episodes.length) _this.display(episodes);
+                            else _this.empty();
                         } else _this.empty();
                     }, function (a, c) { _this.empty(network.errorDecode(a, c)); }, false, {
                         headers: {'X-Requested-With': 'XMLHttpRequest'}
@@ -108,17 +108,17 @@
                     if (iframe) {
                         if (iframe.indexOf('//') === 0) iframe = 'https:' + iframe;
                         episodes = [{title: object.movie.title || object.movie.name, file: iframe}];
-                        _this.build();
+                        _this.display(episodes);
                     } else _this.empty();
                 }
             }, function (a, c) { _this.empty(network.errorDecode(a, c)); }, false, {dataType: 'text'});
         };
 
-        this.build = function () {
-            var _this = this;
+        this.display = function (data) {
             var viewed = Lampa.Storage.cache('online_view', 5000, []);
-            
-            episodes.forEach(function (element) {
+            var list = [];
+
+            data.forEach(function (element) {
                 var hash = Lampa.Utils.hash(element.title + (object.movie.original_title || object.movie.original_name));
                 var view = Lampa.Timeline.view(hash);
                 
@@ -134,7 +134,7 @@
                 }
 
                 item.on('hover:enter', function () {
-                    _this.play(element);
+                    _this.play(element, data);
                     
                     if (viewed.indexOf(hash) === -1) {
                         viewed.push(hash);
@@ -143,41 +143,13 @@
                     }
                 });
 
-                scroll.append(item);
-                items.push(item);
+                list.push(item);
             });
 
-            this.activity.loader(false);
-            this.activity.toggle();
+            this.build(list);
         };
 
-        this.start = function () {
-            Lampa.Controller.add('content', {
-                toggle: function () {
-                    Lampa.Controller.collectionSet(html);
-                    Lampa.Controller.collectionFocus(items[active] ? items[active][0] : false, html);
-                },
-                up: function () {
-                    if (active > 0) {
-                        active--;
-                        Lampa.Controller.collectionFocus(items[active][0], html);
-                    } else Lampa.Controller.toggle('head');
-                },
-                down: function () {
-                    if (active < items.length - 1) {
-                        active++;
-                        Lampa.Controller.collectionFocus(items[active][0], html);
-                    }
-                },
-                back: function () {
-                    Lampa.Activity.backward();
-                }
-            });
-            Lampa.Controller.toggle('content');
-        };
-
-        this.play = function (element) {
-            var _this = this;
+        this.play = function (element, all_data) {
             Lampa.Loading.start();
 
             function getStream(el, callback, error) {
@@ -211,7 +183,7 @@
                 Lampa.Loading.stop();
                 
                 var playlist = [];
-                episodes.forEach(function (el) {
+                all_data.forEach(function (el) {
                     if (el === element) {
                         playlist.push(video);
                     } else {
@@ -232,26 +204,6 @@
                 Lampa.Loading.stop();
                 Lampa.Noty.show('Помилка завантаження потоку');
             });
-        };
-
-        this.empty = function (error) {
-            this.activity.loader(false);
-            Lampa.Noty.show(error || 'Нічого не знайдено на Uakino');
-            Lampa.Activity.backward();
-        };
-
-        this.pause = function () {};
-        this.stop = function () {};
-
-        this.render = function () {
-            return scroll.render();
-        };
-
-        this.destroy = function () {
-            network.clear();
-            scroll.destroy();
-            html.remove();
-            items = [];
         };
     }
 
