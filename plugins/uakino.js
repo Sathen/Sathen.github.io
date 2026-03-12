@@ -22,6 +22,12 @@
             return prox + prox_enc + url;
         }
 
+        function cleanHTML(html) {
+            return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+                       .replace(/<link\b[^>]*>/gi, "")
+                       .replace(/<img\b[^>]*>/gi, "");
+        }
+
         this.search = function () {
             var _this = this;
             var url = mainUrl + '/ua/';
@@ -51,12 +57,12 @@
             }, function (a, c) {
                 Lampa.Loading.stop();
                 _this.empty(network.errorDecode(a, c));
-            }, postData);
+            }, postData, {dataType: 'text'});
         };
 
         this.parseSearch = function (html) {
             var items = [];
-            var dom = $(html);
+            var dom = $(cleanHTML(html));
             dom.find('div.movie-item.short-item').each(function () {
                 var el = $(this);
                 var a = el.find('a.movie-title, a.full-movie');
@@ -80,12 +86,12 @@
             }, function (a, c) {
                 Lampa.Loading.stop();
                 _this.empty(network.errorDecode(a, c));
-            });
+            }, false, {dataType: 'text'});
         };
 
         this.parseDetails = function (html, url) {
             var _this = this;
-            var dom = $(html);
+            var dom = $(cleanHTML(html));
             var id = url.split('/').pop().split('-')[0];
             var is_serial = url.match(/(\/anime-series)|(\/seriesss)|(\/cartoonseries)/);
 
@@ -193,7 +199,7 @@
             }, function (a, c) {
                 Lampa.Loading.stop();
                 Lampa.Noty.show(network.errorDecode(a, c));
-            });
+            }, false, {dataType: 'text'});
         };
 
         this.empty = function (error) {
