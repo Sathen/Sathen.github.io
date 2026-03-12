@@ -37,6 +37,7 @@
         var active = 0;
         var extract_file_regex = /file\s*:\s*["']([^"']+?)["']/g;
         var extract_subs_regex = /subtitle\s*:\s*["']([^"']+?)["']/g;
+        var episodes = [];
 
         this.create = function () {
             var _this = this;
@@ -87,7 +88,7 @@
                     network.silent(getProxy(playlistUrl), function (json) {
                         if (json && json.success) {
                             var eps_dom = $('<div>' + json.response + '</div>');
-                            var episodes = [];
+                            episodes = [];
                             eps_dom.find('div.playlists-videos li').each(function () {
                                 var el = $(this);
                                 episodes.push({
@@ -96,7 +97,7 @@
                                     voice: el.attr('data-voice')
                                 });
                             });
-                            _this.build(episodes);
+                            _this.build();
                         } else _this.empty();
                     }, function (a, c) { _this.empty(network.errorDecode(a, c)); }, false, {
                         headers: {'X-Requested-With': 'XMLHttpRequest'}
@@ -106,22 +107,21 @@
                     var iframe = dom.find('iframe#pre').attr('data-src') || dom.find('iframe#pre').attr('src');
                     if (iframe) {
                         if (iframe.indexOf('//') === 0) iframe = 'https:' + iframe;
-                        _this.build([{title: object.movie.title || object.movie.name, file: iframe}]);
+                        episodes = [{title: object.movie.title || object.movie.name, file: iframe}];
+                        _this.build();
                     } else _this.empty();
                 }
             }, function (a, c) { _this.empty(network.errorDecode(a, c)); }, false, {dataType: 'text'});
         };
 
-        this.build = function (data) {
+        this.build = function () {
             var _this = this;
             var viewed = Lampa.Storage.cache('online_view', 5000, []);
             
-            data.forEach(function (element) {
-                // Generate hash for timeline and viewed status
+            episodes.forEach(function (element) {
                 var hash = Lampa.Utils.hash(element.title + (object.movie.original_title || object.movie.original_name));
                 var view = Lampa.Timeline.view(hash);
                 
-                // Using standard Lampa item template
                 var item = Lampa.Template.get('online', {
                     title: element.title,
                     quality: 'HD'
@@ -134,9 +134,8 @@
                 }
 
                 item.on('hover:enter', function () {
-                    _this.play(element, data);
+                    _this.play(element);
                     
-                    // Mark as viewed
                     if (viewed.indexOf(hash) === -1) {
                         viewed.push(hash);
                         item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
@@ -150,12 +149,13 @@
 
             this.activity.loader(false);
             this.activity.toggle();
-            
-            html.append(scroll.render());
+        };
+
+        this.start = function () {
             Lampa.Controller.add('content', {
                 toggle: function () {
                     Lampa.Controller.collectionSet(html);
-                    Lampa.Controller.collectionFocus(items[active][0], html);
+                    Lampa.Controller.collectionFocus(items[active] ? items[active][0] : false, html);
                 },
                 up: function () {
                     if (active > 0) {
@@ -176,7 +176,7 @@
             Lampa.Controller.toggle('content');
         };
 
-        this.play = function (element, all_data) {
+        this.play = function (element) {
             var _this = this;
             Lampa.Loading.start();
 
@@ -211,7 +211,7 @@
                 Lampa.Loading.stop();
                 
                 var playlist = [];
-                all_data.forEach(function (el) {
+                episodes.forEach(function (el) {
                     if (el === element) {
                         playlist.push(video);
                     } else {
@@ -240,8 +240,11 @@
             Lampa.Activity.backward();
         };
 
+        this.pause = function () {};
+        this.stop = function () {};
+
         this.render = function () {
-            return html;
+            return scroll.render();
         };
 
         this.destroy = function () {
