@@ -4,9 +4,23 @@
     var mainUrl = 'https://uakino.best';
 
     function Uakino(object) {
-        var network = Lampa.Network;
+        var network = new Lampa.Reguest();
         var extract_file_regex = /file\s*:\s*["']([^"']+?)["']/g;
         var extract_subs_regex = /subtitle\s*:\s*["']([^"']+?)["']/g;
+
+        function getProxy(url) {
+            if (Lampa.Platform.is('android')) return url;
+            
+            var prox = 'https://apn-latest.onrender.com/ip/';
+            var host = 'https://uakino.best';
+            var user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
+            
+            var prox_enc = 'param/Origin=' + encodeURIComponent(host) + '/';
+            prox_enc += 'param/Referer=' + encodeURIComponent(host + '/') + '/';
+            prox_enc += 'param/User-Agent=' + encodeURIComponent(user_agent) + '/';
+            
+            return prox + prox_enc + url;
+        }
 
         this.search = function () {
             var _this = this;
@@ -22,12 +36,11 @@
                 Lampa.Loading.stop();
             });
 
-            // Convert object to query string manually
             var postData = Object.keys(data).map(function(key) {
                 return encodeURIComponent(key) + '=' + encodeURIComponent(data[key]);
             }).join('&');
 
-            network.silent(url, function (html) {
+            network.silent(getProxy(url), function (html) {
                 Lampa.Loading.stop();
                 var items = _this.parseSearch(html);
                 if (items.length) {
@@ -35,9 +48,9 @@
                 } else {
                     _this.empty();
                 }
-            }, function () {
+            }, function (a, c) {
                 Lampa.Loading.stop();
-                _this.empty();
+                _this.empty(network.errorDecode(a, c));
             }, postData);
         };
 
@@ -61,12 +74,12 @@
         this.load = function (url) {
             var _this = this;
             Lampa.Loading.start();
-            network.silent(url, function (html) {
+            network.silent(getProxy(url), function (html) {
                 Lampa.Loading.stop();
                 _this.parseDetails(html, url);
-            }, function () {
+            }, function (a, c) {
                 Lampa.Loading.stop();
-                _this.empty();
+                _this.empty(network.errorDecode(a, c));
             });
         };
 
@@ -79,7 +92,7 @@
             if (is_serial) {
                 var playlistUrl = mainUrl + '/engine/ajax/playlists.php?news_id=' + id + '&xfield=playlist&time=' + Date.now();
                 Lampa.Loading.start();
-                network.silent(playlistUrl, function (json) {
+                network.silent(getProxy(playlistUrl), function (json) {
                     Lampa.Loading.stop();
                     if (json && json.success) {
                         var eps_dom = $('<div>' + json.response + '</div>');
@@ -96,9 +109,13 @@
                     } else {
                         _this.empty();
                     }
-                }, function () {
+                }, function (a, c) {
                     Lampa.Loading.stop();
-                    _this.empty();
+                    _this.empty(network.errorDecode(a, c));
+                }, false, {
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
                 });
             } else {
                 var iframe = dom.find('iframe#pre').attr('data-src') || dom.find('iframe#pre').attr('src');
@@ -138,10 +155,9 @@
         this.extractPlayer = function (url, sourceName) {
             var _this = this;
             Lampa.Loading.start();
-            network.silent(url, function (html) {
+            network.silent(getProxy(url), function (html) {
                 Lampa.Loading.stop();
                 
-                // Reset regex state for global flag
                 extract_file_regex.lastIndex = 0;
                 extract_subs_regex.lastIndex = 0;
 
@@ -174,23 +190,18 @@
                 } else {
                     Lampa.Noty.show('Посилання не знайдено');
                 }
-            }, function () {
+            }, function (a, c) {
                 Lampa.Loading.stop();
-                Lampa.Noty.show('Помилка завантаження плеєра');
-            }, false, {
-                headers: {
-                    'Referer': mainUrl + '/'
-                }
+                Lampa.Noty.show(network.errorDecode(a, c));
             });
         };
 
-        this.empty = function () {
-            Lampa.Noty.show('Нічого не знайдено на Uakino');
+        this.empty = function (error) {
+            Lampa.Noty.show(error || 'Нічого не знайдено на Uakino');
         };
     }
 
     function startPlugin() {
-        // Register as a potential source for the "Play" menu
         Lampa.Component.add('uakino', Uakino);
 
         Lampa.Listener.follow('full', function (e) {
@@ -201,18 +212,15 @@
                     uakino.search();
                 });
                 
-                // Adding the button to the container
                 var container = e.object.activity.render().find('.full-start-new__buttons');
                 if (container.length) {
                     container.append(button);
                 } else {
-                    // Fallback for older versions or different skins
                     var torrent_btn = e.object.activity.render().find('.view--torrent');
                     if (torrent_btn.length) torrent_btn.after(button);
                     else e.object.activity.render().find('.full-start__buttons').append(button);
                 }
 
-                // Important: Notify the controller that the collection of buttons has changed
                 if(e.object.items && e.object.items.length) e.object.items[0].emit('groupButtons');
             }
         });
