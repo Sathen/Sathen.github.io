@@ -1,30 +1,29 @@
 (function () {
     'use strict';
 
-    var network = new Lampa.Reguest();
     var mainUrl = 'https://uakino.best';
 
     function Uakino(object) {
-        var comp = new Lampa.InteractionMain(object);
+        var network = Lampa.Network;
         var extract_file_regex = /file\s*:\s*["']([^"']+?)["']/g;
         var extract_subs_regex = /subtitle\s*:\s*["']([^"']+?)["']/g;
 
-        comp.create = function () {
-            this.activity.loader(true);
-            this.search();
-            return this.render();
-        };
-
-        comp.search = function () {
+        this.search = function () {
             var _this = this;
             var url = mainUrl + '/ua/';
             var data = {
                 'do': 'search',
                 'subaction': 'search',
-                'story': object.movie.title
+                'story': object.movie.title || object.movie.name
             };
 
+            Lampa.Loading.start(function(){
+                network.clear();
+                Lampa.Loading.stop();
+            });
+
             network.silent(url, function (html) {
+                Lampa.Loading.stop();
                 var items = _this.parseSearch(html);
                 if (items.length) {
                     _this.load(items[0].href);
@@ -32,11 +31,12 @@
                     _this.empty();
                 }
             }, function () {
+                Lampa.Loading.stop();
                 _this.empty();
             }, Lampa.Utils.paramsToQuery(data));
         };
 
-        comp.parseSearch = function (html) {
+        this.parseSearch = function (html) {
             var items = [];
             var dom = $(html);
             dom.find('div.movie-item.short-item').each(function () {
@@ -53,16 +53,19 @@
             return items;
         };
 
-        comp.load = function (url) {
+        this.load = function (url) {
             var _this = this;
+            Lampa.Loading.start();
             network.silent(url, function (html) {
+                Lampa.Loading.stop();
                 _this.parseDetails(html, url);
             }, function () {
+                Lampa.Loading.stop();
                 _this.empty();
             });
         };
 
-        comp.parseDetails = function (html, url) {
+        this.parseDetails = function (html, url) {
             var _this = this;
             var dom = $(html);
             var id = url.split('/').pop().split('-')[0];
@@ -70,7 +73,9 @@
 
             if (is_serial) {
                 var playlistUrl = mainUrl + '/engine/ajax/playlists.php?news_id=' + id + '&xfield=playlist&time=' + Date.now();
+                Lampa.Loading.start();
                 network.silent(playlistUrl, function (json) {
+                    Lampa.Loading.stop();
                     if (json && json.success) {
                         var eps_dom = $('<div>' + json.response + '</div>');
                         var episodes = [];
@@ -87,20 +92,21 @@
                         _this.empty();
                     }
                 }, function () {
+                    Lampa.Loading.stop();
                     _this.empty();
                 });
             } else {
                 var iframe = dom.find('iframe#pre').attr('data-src') || dom.find('iframe#pre').attr('src');
                 if (iframe) {
                     if (iframe.indexOf('//') === 0) iframe = 'https:' + iframe;
-                    _this.extractPlayer(iframe, object.movie.title);
+                    _this.extractPlayer(iframe, object.movie.title || object.movie.name);
                 } else {
                     _this.empty();
                 }
             }
         };
 
-        comp.showEpisodes = function (episodes) {
+        this.showEpisodes = function (episodes) {
             var _this = this;
             var items = episodes.map(function (eps) {
                 return {
@@ -124,11 +130,16 @@
             });
         };
 
-        comp.extractPlayer = function (url, sourceName) {
+        this.extractPlayer = function (url, sourceName) {
             var _this = this;
-            this.activity.loader(true);
+            Lampa.Loading.start();
             network.silent(url, function (html) {
-                _this.activity.loader(false);
+                Lampa.Loading.stop();
+                
+                // Reset regex state for global flag
+                extract_file_regex.lastIndex = 0;
+                extract_subs_regex.lastIndex = 0;
+
                 var m3u8_match = extract_file_regex.exec(html);
                 var subs_match = extract_subs_regex.exec(html);
                 
@@ -138,7 +149,7 @@
                 if (video_url) {
                     var video = {
                         url: video_url,
-                        title: object.movie.title + (sourceName ? ' / ' + sourceName : ''),
+                        title: (object.movie.title || object.movie.name) + (sourceName ? ' / ' + sourceName : ''),
                         subtitles: []
                     };
 
@@ -159,7 +170,7 @@
                     Lampa.Noty.show('Посилання не знайдено');
                 }
             }, function () {
-                _this.activity.loader(false);
+                Lampa.Loading.stop();
                 Lampa.Noty.show('Помилка завантаження плеєра');
             }, false, {
                 headers: {
@@ -168,13 +179,15 @@
             });
         };
 
-        comp.empty = function () {
-            this.activity.loader(false);
+        this.empty = function () {
             Lampa.Noty.show('Нічого не знайдено на Uakino');
         };
     }
 
     function startPlugin() {
+        // Register as a potential source for the "Play" menu
+        Lampa.Component.add('uakino', Uakino);
+
         Lampa.Listener.follow('full', function (e) {
             if (e.type == 'complite') {
                 var button = $('<div class="full-start__button selector view--uakino"><span>Uakino</span></div>');
@@ -183,12 +196,19 @@
                     uakino.search();
                 });
                 
+                // Adding the button to the container
                 var container = e.object.activity.render().find('.full-start-new__buttons');
                 if (container.length) {
                     container.append(button);
                 } else {
-                    e.object.activity.render().find('.view--torrent').after(button);
+                    // Fallback for older versions or different skins
+                    var torrent_btn = e.object.activity.render().find('.view--torrent');
+                    if (torrent_btn.length) torrent_btn.after(button);
+                    else e.object.activity.render().find('.full-start__buttons').append(button);
                 }
+
+                // Important: Notify the controller that the collection of buttons has changed
+                if(e.object.items && e.object.items.length) e.object.items[0].emit('groupButtons');
             }
         });
     }
