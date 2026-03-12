@@ -65,20 +65,25 @@
             }).join('&');
 
             network.silent(getProxy(url), function (html_str) {
-                var dom = $(cleanHTML(html_str));
-                var found = [];
-                dom.find('div.movie-item.short-item').each(function () {
-                    var a = $(this).find('a.movie-title, a.full-movie');
-                    var href = a.attr('href');
-                    if (href && !href.match(/(\/news\/)|(\/franchise\/)/)) {
-                        found.push({title: a.text().trim(), href: fixUrl(href)});
-                    }
-                });
+                try {
+                    var dom = $(cleanHTML(html_str));
+                    var found = [];
+                    dom.find('div.movie-item.short-item').each(function () {
+                        var a = $(this).find('a.movie-title, a.full-movie');
+                        var href = a.attr('href');
+                        if (href && !href.match(/(\/news\/)|(\/franchise\/)/)) {
+                            found.push({title: a.text().trim(), href: fixUrl(href)});
+                        }
+                    });
 
-                if (found.length) {
-                    _this.load(found[0].href);
-                } else {
-                    _this.empty();
+                    if (found.length) {
+                        _this.load(found[0].href);
+                    } else {
+                        _this.empty();
+                    }
+                } catch(e) {
+                    console.error('Uakino search parse error:', e);
+                    _this.empty('Помилка обробки пошуку');
                 }
             }, function (a, c) {
                 _this.empty(network.errorDecode(a, c));
@@ -89,37 +94,42 @@
 
         this.load = function (url) {
             network.silent(getProxy(url), function (html_str) {
-                var id_match = url.split('/').pop().match(/^(\d+)/);
-                var id = id_match ? id_match[1] : '';
-                var is_serial = url.match(/(\/anime-series)|(\/seriesss)|(\/cartoonseries)/);
+                try {
+                    var id_match = url.split('/').pop().match(/^(\d+)/);
+                    var id = id_match ? id_match[1] : '';
+                    var is_serial = url.match(/(\/anime-series)|(\/seriesss)|(\/cartoonseries)/);
 
-                if (is_serial && id) {
-                    var playlistUrl = mainUrl + '/engine/ajax/playlists.php?news_id=' + id + '&xfield=playlist&time=' + Date.now();
-                    network.silent(getProxy(playlistUrl), function (json) {
-                        if (json && json.success && json.response) {
-                            var eps_dom = $('<div>' + json.response + '</div>');
-                            episodes = [];
-                            eps_dom.find('div.playlists-videos li').each(function () {
-                                var el = $(this);
-                                episodes.push({
-                                    title: el.text().trim(),
-                                    file: el.attr('data-file'),
-                                    voice: el.attr('data-voice')
+                    if (is_serial && id) {
+                        var playlistUrl = mainUrl + '/engine/ajax/playlists.php?news_id=' + id + '&xfield=playlist&time=' + Date.now();
+                        network.silent(getProxy(playlistUrl), function (json) {
+                            if (json && json.success && json.response) {
+                                var eps_dom = $('<div>' + json.response + '</div>');
+                                episodes = [];
+                                eps_dom.find('div.playlists-videos li').each(function () {
+                                    var el = $(this);
+                                    episodes.push({
+                                        title: el.text().trim(),
+                                        file: el.attr('data-file'),
+                                        voice: el.attr('data-voice')
+                                    });
                                 });
-                            });
-                            if (episodes.length) _this.build();
-                            else _this.empty();
+                                if (episodes.length) _this.build();
+                                else _this.empty();
+                            } else _this.empty();
+                        }, function (a, c) { _this.empty(network.errorDecode(a, c)); }, false, {
+                            headers: {'X-Requested-With': 'XMLHttpRequest'}
+                        });
+                    } else {
+                        var dom = $(cleanHTML(html_str));
+                        var iframe = dom.find('iframe#pre').attr('data-src') || dom.find('iframe#pre').attr('src');
+                        if (iframe) {
+                            episodes = [{title: object.movie.title || object.movie.name, file: fixUrl(iframe)}];
+                            _this.build();
                         } else _this.empty();
-                    }, function (a, c) { _this.empty(network.errorDecode(a, c)); }, false, {
-                        headers: {'X-Requested-With': 'XMLHttpRequest'}
-                    });
-                } else {
-                    var dom = $(cleanHTML(html_str));
-                    var iframe = dom.find('iframe#pre').attr('data-src') || dom.find('iframe#pre').attr('src');
-                    if (iframe) {
-                        episodes = [{title: object.movie.title || object.movie.name, file: fixUrl(iframe)}];
-                        _this.build();
-                    } else _this.empty();
+                    }
+                } catch(e) {
+                    console.error('Uakino load parse error:', e);
+                    _this.empty('Помилка завантаження даних');
                 }
             }, function (a, c) { _this.empty(network.errorDecode(a, c)); }, false, {dataType: 'text'});
         };
@@ -133,9 +143,15 @@
                 var hash = Lampa.Utils.hash(element.title + (object.movie.original_title || object.movie.original_name));
                 var view = Lampa.Timeline.view(hash);
                 
-                var item = Lampa.Template.get('online', {
+                // Using 'torrent_item' as it's guaranteed to exist in core
+                var item = Lampa.Template.get('torrent_item', {
                     title: element.title,
-                    quality: 'HD'
+                    size: element.voice || 'Uakino',
+                    date: '',
+                    tracker: 'Uakino',
+                    seeds: '',
+                    grabs: '',
+                    bitrate: ''
                 });
 
                 item.append(Lampa.Timeline.render(view));
@@ -198,25 +214,30 @@
             function getStream(el, callback, error) {
                 var stream_url = fixUrl(el.file);
                 network.silent(getProxy(stream_url), function (html_player) {
-                    extract_file_regex.lastIndex = 0;
-                    extract_subs_regex.lastIndex = 0;
-                    
-                    var m3u8_match = extract_file_regex.exec(html_player);
-                    var subs_match = extract_subs_regex.exec(html_player);
-                    
-                    if (m3u8_match) {
-                        var video = {
-                            url: m3u8_match[1],
-                            title: el.title,
-                            subtitles: []
-                        };
-                        if (subs_match) {
-                            var label = subs_match[1].substring(subs_match[1].lastIndexOf('[') + 1, subs_match[1].lastIndexOf(']'));
-                            var src = subs_match[1].substring(subs_match[1].lastIndexOf(']') + 1);
-                            video.subtitles.push({label: label || 'Укр', url: src});
-                        }
-                        callback(video);
-                    } else error();
+                    try {
+                        extract_file_regex.lastIndex = 0;
+                        extract_subs_regex.lastIndex = 0;
+                        
+                        var m3u8_match = extract_file_regex.exec(html_player);
+                        var subs_match = extract_subs_regex.exec(html_player);
+                        
+                        if (m3u8_match) {
+                            var video = {
+                                url: m3u8_match[1],
+                                title: el.title,
+                                subtitles: []
+                            };
+                            if (subs_match) {
+                                var label = subs_match[1].substring(subs_match[1].lastIndexOf('[') + 1, subs_match[1].lastIndexOf(']'));
+                                var src = subs_match[1].substring(subs_match[1].lastIndexOf(']') + 1);
+                                video.subtitles.push({label: label || 'Укр', url: src});
+                            }
+                            callback(video);
+                        } else error();
+                    } catch(e) {
+                        console.error('Uakino stream extraction error:', e);
+                        error();
+                    }
                 }, error, false, {dataType: 'text'});
             }
 
