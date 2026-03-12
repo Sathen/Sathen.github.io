@@ -22,6 +22,11 @@
                 Lampa.Loading.stop();
             });
 
+            // Convert object to query string manually
+            var postData = Object.keys(data).map(function(key) {
+                return encodeURIComponent(key) + '=' + encodeURIComponent(data[key]);
+            }).join('&');
+
             network.silent(url, function (html) {
                 Lampa.Loading.stop();
                 var items = _this.parseSearch(html);
@@ -33,7 +38,7 @@
             }, function () {
                 Lampa.Loading.stop();
                 _this.empty();
-            }, Lampa.Utils.paramsToQuery(data));
+            }, postData);
         };
 
         this.parseSearch = function (html) {
