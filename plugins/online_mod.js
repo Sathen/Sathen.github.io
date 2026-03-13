@@ -14,7 +14,7 @@
     // In a browser, prepend the proxy URL from Lampa's shared setting.
 
     function prox(url) {
-        var p = Lampa.Storage.get('online_proxy_all', '');
+        var p = Lampa.Storage.get('uakino_proxy', '') || Lampa.Storage.get('online_proxy_all', '');
         if (!p) return url;
         if (p.slice(-1) !== '/') p += '/';
         return p + url;
@@ -538,12 +538,50 @@
         e.object.activity.render().find('.view--torrent').after(btn);
     }
 
+    // ── Settings ──────────────────────────────────────────────────────────────
+    // Mirrors the online.js pattern: inject a folder into Settings main page,
+    // register a settings_uakino template with a text input for the proxy URL.
+
+    function addSettings() {
+        Lampa.Params.select('uakino_proxy', '', '');
+
+        Lampa.Template.add('settings_uakino',
+            '<div>' +
+            '<div class="settings-param selector" data-type="input" data-name="uakino_proxy" placeholder="https://cors-proxy.example.com/">' +
+                '<div class="settings-param__name">Uakino Proxy URL</div>' +
+                '<div class="settings-param__value"></div>' +
+                '<div class="settings-param__descr">CORS proxy for browser/web use. Leave empty on Android TV.</div>' +
+            '</div>' +
+            '</div>'
+        );
+
+        if (Lampa.Settings.main && !Lampa.Settings.main().render().find('[data-component="uakino"]').length) {
+            var folder = $(
+                '<div class="settings-folder selector" data-component="uakino">' +
+                '<div class="settings-folder__icon">' +
+                '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:2em;height:2em">' +
+                '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z" fill="currentColor"/>' +
+                '</svg>' +
+                '</div>' +
+                '<div class="settings-folder__name">Uakino</div>' +
+                '</div>'
+            );
+            Lampa.Settings.main().render().find('[data-component="more"]').after(folder);
+            Lampa.Settings.main().update();
+        }
+    }
+
     // ── Init ──────────────────────────────────────────────────────────────────
 
     function initPlugin() {
         ensureTemplates();
         Lampa.Component.add('uakino', UakinoComponent);
         Lampa.Listener.follow('full', addButton);
+
+        if (window.appready) addSettings();
+        else Lampa.Listener.follow('app', function (e) {
+            if (e.type === 'ready') addSettings();
+        });
     }
 
     if (window.Lampa && Lampa.Component) {
