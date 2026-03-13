@@ -9,6 +9,17 @@
     var BASE_URL  = 'https://uakino.best';
     var BLACKLIST = /\/news\/|\/franchise\//;
 
+    // ── CORS proxy support ────────────────────────────────────────────────────
+    // On Android TV, network.native() uses Android's native HTTP (no CORS).
+    // In a browser, prepend the proxy URL from Lampa's shared setting.
+
+    function prox(url) {
+        var p = Lampa.Storage.get('online_proxy_all', '');
+        if (!p) return url;
+        if (p.slice(-1) !== '/') p += '/';
+        return p + url;
+    }
+
     // ── Template fallback (provided by online.js when installed) ─────────────
 
     function ensureTemplates() {
@@ -224,7 +235,7 @@
             network.timeout(15000);
 
             network.native(
-                BASE_URL + '/ua/',
+                prox(BASE_URL + '/ua/'),
                 function (html) {
                     var doc   = (new DOMParser()).parseFromString(html, 'text/html');
                     var items = doc.querySelectorAll('div.movie-item.short-item');
@@ -279,7 +290,7 @@
             network.timeout(15000);
 
             network.native(
-                apiUrl,
+                prox(apiUrl),
                 function (json) {
                     if (json && json.success && json.response) {
                         loadSeries(json.response);
@@ -343,7 +354,7 @@
             network.timeout(15000);
 
             network.native(
-                movieUrl,
+                prox(movieUrl),
                 function (html) {
                     var doc       = (new DOMParser()).parseFromString(html, 'text/html');
                     var iframe    = doc.querySelector('iframe#pre');
@@ -384,7 +395,7 @@
             var net2 = new Lampa.Reguest();
             net2.timeout(15000);
             net2.native(
-                url,
+                prox(url),
                 function (html) {
                     var fm = html.match(/file\s*:\s*['"]([^'"]+?)['"]/);
                     var sm = html.match(/subtitle\s*:\s*['"]([^'"]+?)['"]/);
