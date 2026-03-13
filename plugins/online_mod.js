@@ -16,7 +16,11 @@
     function prox(url) {
         var p = Lampa.Storage.get('uakino_proxy', '') || Lampa.Storage.get('online_proxy_all', '');
         if (!p) return url;
-        if (p.slice(-1) !== '/') p += '/';
+        // Don't add '/' for query-param style proxies (ends with '?' or '=')
+        // e.g. https://corsproxy.io/?  →  https://corsproxy.io/?https://...
+        //      https://proxy.com/get?url=  →  https://proxy.com/get?url=https://...
+        var last = p.slice(-1);
+        if (last !== '/' && last !== '?' && last !== '=') p += '/';
         return p + url;
     }
 
