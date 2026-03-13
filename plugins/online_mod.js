@@ -4,31 +4,28 @@
     var mainUrl = 'https://uakino.best';
 
     /**
-     * Define 'online' template if missing (standard for Lampa online plugins)
+     * Define 'online' template if missing
      */
     if (!Lampa.Template.get('online')) {
         Lampa.Template.add('online', "<div class=\"online selector\">\n        <div class=\"online__body\">\n            <div style=\"position: absolute;left: 0;top: -0.3em;width: 2.4em;height: 2.4em\">\n                <svg style=\"height: 2.4em; width:  2.4em;\" viewBox=\"0 0 128 128\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n                    <circle cx=\"64\" cy=\"64\" r=\"56\" stroke=\"white\" stroke-width=\"16\"/>\n                    <path d=\"M90.5 64.3827L50 87.7654L50 41L90.5 64.3827Z\" fill=\"white\"/>\n                </svg>\n            </div>\n            <div class=\"online__title\" style=\"padding-left: 2.1em;\">{title}</div>\n            <div class=\"online__quality\" style=\"padding-left: 3.4em;\">{quality}{info}</div>\n        </div>\n    </div>");
     }
 
     /**
-     * Helper to get proxy URL for browser environments
+     * Helper to get proxy URL
      */
     function getProxy(url) {
         if (Lampa.Platform.is('android')) return url;
-        
         var prox = 'https://apn-latest.onrender.com/ip/';
         var host = 'https://uakino.best';
         var user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
-        
         var prox_enc = 'param/Origin=' + encodeURIComponent(host) + '/';
         prox_enc += 'param/Referer=' + encodeURIComponent(host + '/') + '/';
         prox_enc += 'param/User-Agent=' + encodeURIComponent(user_agent) + '/';
-        
         return prox + prox_enc + url;
     }
 
     /**
-     * Strip scripts and other heavy tags to prevent 404s and execution during parsing
+     * Strip scripts and other heavy tags
      */
     function cleanHTML(html) {
         if (!html) return '';
@@ -38,7 +35,7 @@
     }
 
     /**
-     * Ensure URLs are absolute and have protocol
+     * Absolute URLs
      */
     function fixUrl(url) {
         if (!url) return '';
@@ -48,7 +45,7 @@
     }
 
     function Uakino(object) {
-        var network = Lampa.Network; // Use global network instance as recommended
+        var network = Lampa.Network;
         var scroll = new Lampa.Scroll({mask: true, over: true, scroll_by_item: true});
         var items = [];
         var active = 0;
@@ -86,10 +83,10 @@
                     if (found.length) {
                         _this.load(found[0].href);
                     } else {
-                        _this.empty();
+                        _this.empty('Нічого не знайдено');
                     }
                 } catch(e) {
-                    _this.empty('Помилка обробки пошуку: ' + e.message);
+                    _this.empty('Помилка пошуку: ' + e.message);
                 }
             }, function (a, c) {
                 _this.empty(network.errorDecode(a, c));
@@ -101,7 +98,9 @@
         this.load = function (url) {
             network.silent(getProxy(url), function (html_str) {
                 try {
-                    var id_match = url.split('/').pop().match(/^(\d+)/);
+                    var parts = url.split('/');
+                    var lastPart = parts.pop() || parts.pop();
+                    var id_match = lastPart ? lastPart.match(/^(\d+)/) : null;
                     var id = id_match ? id_match[1] : '';
                     var is_serial = url.match(/(\/anime-series)|(\/seriesss)|(\/cartoonseries)/);
 
@@ -120,12 +119,11 @@
                                             voice: el.attr('data-voice')
                                         });
                                     });
-                                    if (episodes.length) {
-                                        setTimeout(function() { _this.build(); }, 10);
-                                    } else _this.empty();
-                                } else _this.empty();
+                                    if (episodes.length) _this.build();
+                                    else _this.empty('Список епізодів порожній');
+                                } else _this.empty('Не вдалося отримати плейлист');
                             } catch(e) {
-                                _this.empty('Помилка обробки списку: ' + e.message);
+                                _this.empty('Помилка списку: ' + e.message);
                             }
                         }, function (a, c) { _this.empty(network.errorDecode(a, c)); }, false, {
                             headers: {'X-Requested-With': 'XMLHttpRequest'}
@@ -135,55 +133,59 @@
                         var iframe = dom.find('iframe#pre').attr('data-src') || dom.find('iframe#pre').attr('src');
                         if (iframe) {
                             episodes = [{title: object.movie.title || object.movie.name, file: fixUrl(iframe)}];
-                            setTimeout(function() { _this.build(); }, 10);
-                        } else _this.empty();
+                            _this.build();
+                        } else _this.empty('Плеєр не знайдено');
                     }
                 } catch(e) {
-                    _this.empty('Помилка завантаження даних: ' + e.message);
+                    _this.empty('Помилка завантаження: ' + e.message);
                 }
             }, function (a, c) { _this.empty(network.errorDecode(a, c)); }, false, {dataType: 'text'});
         };
 
         this.build = function () {
-            var viewed = Lampa.Storage.cache('online_view', 5000, []);
-            items = [];
-            scroll.clear();
-            
-            episodes.forEach(function (element, index) {
-                var hash = Lampa.Utils.hash(element.title + (object.movie.original_title || object.movie.original_name));
-                var view = Lampa.Timeline.view(hash);
+            try {
+                var viewed = Lampa.Storage.cache('online_view', 5000, []);
+                items = [];
+                scroll.clear();
                 
-                var item = Lampa.Template.get('online', {
-                    title: element.title,
-                    quality: 'HD',
-                    info: element.voice ? ' / ' + element.voice : ''
-                });
-
-                item.append(Lampa.Timeline.render(view));
-                
-                if (viewed.indexOf(hash) !== -1) {
-                    item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
-                }
-
-                item.on('hover:enter', function () {
-                    active = index;
-                    _this.play(element);
+                episodes.forEach(function (element, index) {
+                    var hash = Lampa.Utils.hash(element.title + (object.movie.original_title || object.movie.original_name));
+                    var view = Lampa.Timeline.view(hash);
                     
-                    if (viewed.indexOf(hash) === -1) {
-                        viewed.push(hash);
+                    var item = Lampa.Template.get('online', {
+                        title: element.title,
+                        quality: 'HD',
+                        info: element.voice ? ' / ' + element.voice : ''
+                    });
+
+                    item.append(Lampa.Timeline.render(view));
+                    
+                    if (viewed.indexOf(hash) !== -1) {
                         item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
-                        Lampa.Storage.set('online_view', viewed);
                     }
-                }).on('hover:focus', function(){
-                    active = index;
+
+                    item.on('hover:enter', function () {
+                        active = index;
+                        _this.play(element);
+                        
+                        if (viewed.indexOf(hash) === -1) {
+                            viewed.push(hash);
+                            item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
+                            Lampa.Storage.set('online_view', viewed);
+                        }
+                    }).on('hover:focus', function(){
+                        active = index;
+                    });
+
+                    scroll.append(item);
+                    items.push(item);
                 });
 
-                scroll.append(item);
-                items.push(item);
-            });
-
-            this.activity.loader(false);
-            this.activity.toggle();
+                this.activity.loader(false);
+                this.activity.toggle();
+            } catch(e) {
+                this.empty('Помилка побудови: ' + e.message);
+            }
         };
 
         this.start = function () {
@@ -222,7 +224,6 @@
                     try {
                         extract_file_regex.lastIndex = 0;
                         extract_subs_regex.lastIndex = 0;
-                        
                         var m3u8_match = extract_file_regex.exec(html_player);
                         var subs_match = extract_subs_regex.exec(html_player);
                         
@@ -247,7 +248,6 @@
 
             getStream(element, function (video) {
                 Lampa.Loading.stop();
-                
                 var playlist = episodes.map(function (el) {
                     if (el === element) return video;
                     return {
@@ -259,7 +259,6 @@
                         }
                     };
                 });
-
                 Lampa.Player.play(video);
                 Lampa.Player.playlist(playlist);
             }, function () {
@@ -269,18 +268,14 @@
         };
 
         this.empty = function (error) {
+            Lampa.Noty.show(error || 'Нічого не знайдено');
             this.activity.loader(false);
-            Lampa.Noty.show(error || 'Нічого не знайдено на Uakino');
-            setTimeout(function() { Lampa.Activity.backward(); }, 10);
+            if (this.activity.is_started) Lampa.Activity.backward();
         };
 
         this.pause = function () {};
         this.stop = function () {};
-
-        this.render = function () {
-            return scroll.render();
-        };
-
+        this.render = function () { return scroll.render(); };
         this.destroy = function () {
             network.clear();
             scroll.destroy();
