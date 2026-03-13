@@ -222,7 +222,10 @@
                     current_provider = PROVIDERS[b.index];
                     Lampa.Storage.set('uakino_default_provider', current_provider.id);
                     choice = { voice: 0, voice_name: '', season: 0, season_id: null };
+                    filter_items = { voice: [], season: [], season_ids: [] };
+                    comp.loading(true);
                     comp.reset();
+                    renderFilter();
                     doSearch();
                 } else {
                     choice[a.stype] = b.index;
@@ -397,12 +400,16 @@
             var savedChoice = saved[key] || {};
             Lampa.Arrays.extend(choice, savedChoice, true);
 
+            // Always show Source badge immediately, even before results arrive
+            filter_items = { voice: [], season: [], season_ids: [] };
+            renderFilter();
+
             network.clear();
             network.timeout(15000);
 
             // ── AnimeON: pure JSON REST API ──
             if (provider.engine === 'animeon') {
-                var animeSearchUrl = provider.url + '/api/anime/search?=text=' + encodeURIComponent(title);
+                var animeSearchUrl = provider.url + '/api/anime/search?text=' + encodeURIComponent(title);
                 network.native(
                     prox(animeSearchUrl),
                     function (json) {
@@ -799,7 +806,9 @@
                 function (json) {
                     var videoUrl = json && json.videoUrl;
                     if (!videoUrl) { callback(null); return; }
-                    extractPlayerJs(videoUrl, callback);
+                    // videoUrl from AnimeON is a direct media URL, not a player page
+                    if (videoUrl.indexOf('http') !== 0) videoUrl = 'https:' + videoUrl;
+                    callback({ file: videoUrl, subtitle: json.subtitleUrl || null });
                 },
                 function () { callback(null); },
                 null
