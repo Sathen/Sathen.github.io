@@ -1,30 +1,102 @@
 /**
- * Uakino Lampa Plugin
- * Adds a "Uakino" button on movie/series detail pages, searches uakino.best,
- * and plays M3U8 streams via the Lampa player.
+ * UA Онлайн Lampa Plugin
+ * Multi-provider Ukrainian streaming plugin. Supports Uakino, Eneyida, KinoTron,
+ * Цікава Ідея, KinoVezha, Serialno, UAFlix, AnimeON.
  */
 (function () {
     'use strict';
 
-    var BASE_URL  = 'https://uakino.best';
-    var BLACKLIST = /\/news\/|\/franchise\//;
+    // ── Provider definitions ──────────────────────────────────────────────────
+
+    var PROVIDERS = [
+        {
+            id: 'uakino',   name: 'Uakino',
+            url: 'https://uakino.best',
+            engine: 'dle',
+            searchPath: '/ua/',
+            searchSelector: 'div.movie-item.short-item',
+            searchLink: 'a.movie-title, a.full-movie',
+            blacklist: /\/news\/|\/franchise\//
+        },
+        {
+            id: 'eneyida',  name: 'Eneyida',
+            url: 'https://eneyida.tv',
+            engine: 'iframe',
+            searchPath: '/',
+            searchSelector: 'article.short',
+            searchLink: 'a.short_title',
+            iframeSelector: '.tabs_b.visible iframe, .video-box iframe'
+        },
+        {
+            id: 'kinotron', name: 'KinoTron',
+            url: 'https://kinotron.tv',
+            engine: 'iframe',
+            searchPath: '/index.php',
+            searchSelector: '.th-item',
+            searchLink: '.th-in',
+            iframeAttr: 'data-src',
+            iframeSelector: '.video-box iframe'
+        },
+        {
+            id: 'cikavaid', name: 'Цікава Ідея',
+            url: 'https://cikava-ideya.top',
+            engine: 'iframe',
+            searchPath: '/',
+            searchSelector: '.th-item',
+            searchLink: '.th-in',
+            iframeSelector: '.video-box iframe'
+        },
+        {
+            id: 'kinovezha', name: 'KinoVezha',
+            url: 'https://kinovezha.tv',
+            engine: 'iframe',
+            searchPath: '/',
+            searchSelector: '.movie-item',
+            searchLink: '.movie-item__link',
+            iframeSelector: '.video-responsive > iframe',
+            obfuscated: true
+        },
+        {
+            id: 'serialno', name: 'Serialno',
+            url: 'https://serialno.tv',
+            engine: 'iframe',
+            searchPath: '/',
+            searchSelector: '.th-item',
+            searchLink: '.th-in',
+            iframeSelector: '.video-box iframe',
+            obfuscated: true
+        },
+        {
+            id: 'uaflix',   name: 'UAFlix',
+            url: 'https://uafix.net',
+            engine: 'iframe',
+            searchMethod: 'get',
+            searchPath: '/index.php',
+            searchSelector: '.sres-wrap',
+            searchLink: '.sres-wrap',
+            iframeSelector: '.video-box iframe'
+        },
+        {
+            id: 'animeon',  name: 'AnimeON',
+            url: 'https://animeon.club',
+            engine: 'animeon'
+        }
+    ];
+
+    var savedProviderId = Lampa.Storage.get('uakino_default_provider', 'uakino');
+    var current_provider = PROVIDERS.filter(function(p){ return p.id === savedProviderId; })[0] || PROVIDERS[0];
 
     // ── CORS proxy support ────────────────────────────────────────────────────
-    // On Android TV, network.native() uses Android's native HTTP (no CORS).
-    // In a browser, prepend the proxy URL from Lampa's shared setting.
 
     function prox(url) {
         var p = Lampa.Storage.get('uakino_proxy', '') || Lampa.Storage.get('online_proxy_all', '');
         if (!p) return url;
-        // Don't add '/' for query-param style proxies (ends with '?' or '=')
-        // e.g. https://corsproxy.io/?  →  https://corsproxy.io/?https://...
-        //      https://proxy.com/get?url=  →  https://proxy.com/get?url=https://...
         var last = p.slice(-1);
         if (last !== '/' && last !== '?' && last !== '=') p += '/';
         return p + url;
     }
 
-    // ── Template fallback (provided by online.js when installed) ─────────────
+    // ── Template fallback ─────────────────────────────────────────────────────
 
     function ensureTemplates() {
         try { Lampa.Template.get('online', {}); }
@@ -51,6 +123,59 @@
         var wb = b.split(/\s+/);
         var common = wa.filter(function (w) { return wb.indexOf(w) >= 0; }).length;
         return common / Math.max(wa.length, wb.length);
+    }
+
+    // ── parsePlayerJson — normalise nested dub/season/episode JSON ────────────
+
+    function parsePlayerJson(data) {
+        var flat = [];
+
+        function addEp(title, file, voice, seasonName, subtitle) {
+            if (!file) return;
+            if (file.indexOf('http') !== 0) file = 'https:' + file;
+            flat.push({
+                title:       title || 'Серія',
+                voice:       voice || '',
+                season_name: seasonName || null,
+                m3u8:        file,
+                subtitle:    subtitle || null
+            });
+        }
+
+        function walk(node, voice, seasonName) {
+            if (!node) return;
+            if (node.file) { addEp(node.title, node.file, voice, seasonName, node.subtitle); return; }
+            if (!node.folder) return;
+            var first = node.folder[0];
+            if (first && first.folder) {
+                // node = dub, node.folder = seasons
+                node.folder.forEach(function(season) {
+                    if (season.folder) {
+                        season.folder.forEach(function(ep){
+                            addEp(ep.title, ep.file, node.title, season.title, ep.subtitle);
+                        });
+                    } else {
+                        addEp(season.title, season.file, node.title, null, season.subtitle);
+                    }
+                });
+            } else {
+                // node = dub, node.folder = episodes
+                node.folder.forEach(function(ep){
+                    addEp(ep.title, ep.file, node.title, seasonName, ep.subtitle);
+                });
+            }
+        }
+
+        if (Array.isArray(data)) {
+            if (data.length && data[0].folder) {
+                data.forEach(function(n){ walk(n, ''); });
+            } else {
+                data.forEach(function(n){ addEp(n.title, n.file, '', null, n.subtitle); });
+            }
+        } else {
+            walk(data, '');
+        }
+        return flat;
     }
 
     // ── Component ─────────────────────────────────────────────────────────────
@@ -89,9 +214,16 @@
             fltr.onSelect = function (type, a, b) {
                 if (type !== 'filter') return;
                 if (a.reset) {
+                    choice = { voice: 0, voice_name: '', season: 0, season_id: null };
                     comp.reset();
                     renderFilter();
                     appendItems(filtered());
+                } else if (a.stype === 'source') {
+                    current_provider = PROVIDERS[b.index];
+                    Lampa.Storage.set('uakino_default_provider', current_provider.id);
+                    choice = { voice: 0, voice_name: '', season: 0, season_id: null };
+                    comp.reset();
+                    doSearch();
                 } else {
                     choice[a.stype] = b.index;
                     if (a.stype === 'voice')  choice.voice_name = filter_items.voice[b.index];
@@ -199,6 +331,17 @@
             var select = [];
             select.push({ title: Lampa.Lang.translate('torrent_parser_reset'), reset: true });
 
+            // Source dropdown (always shown)
+            var sourceItems = PROVIDERS.map(function(p, i) {
+                return { title: p.name, selected: p.id === current_provider.id, index: i };
+            });
+            select.push({
+                title:    'Джерело',
+                subtitle: current_provider.name,
+                stype:    'source',
+                items:    sourceItems
+            });
+
             if (fi.voice && fi.voice.length > 1) {
                 var subitems = fi.voice.map(function (name, i) {
                     return { title: name, selected: i === ch.voice, index: i };
@@ -230,6 +373,7 @@
 
         this.selected = function (fi) {
             var sel = [];
+            sel.push('Джерело: ' + current_provider.name);
             if (fi.voice && fi.voice.length > 1) {
                 sel.push(Lampa.Lang.translate('torrent_parser_voice') + ': ' + fi.voice[choice.voice]);
             }
@@ -242,33 +386,75 @@
         // ── Search & load logic ───────────────────────────────────────────────
 
         function doSearch() {
+            var provider  = current_provider;
             var movie     = object.movie;
             var title     = movie.title || movie.name || '';
             var origTitle = movie.original_title || movie.original_name || '';
 
-            // Restore saved voice choice
+            // Restore saved voice/season choice for this movie+provider
             var saved      = Lampa.Storage.cache('online_choice_uakino', 500, {});
-            var savedChoice = saved[movie.id] || {};
+            var key        = (movie.id || '') + '_' + provider.id;
+            var savedChoice = saved[key] || {};
             Lampa.Arrays.extend(choice, savedChoice, true);
 
             network.clear();
             network.timeout(15000);
 
+            // ── AnimeON: pure JSON REST API ──
+            if (provider.engine === 'animeon') {
+                var animeSearchUrl = provider.url + '/api/anime/search?=text=' + encodeURIComponent(title);
+                network.native(
+                    prox(animeSearchUrl),
+                    function (json) {
+                        var best = null, bestScore = -1;
+                        (json.result || []).forEach(function(item) {
+                            var score = Math.max(
+                                titleSimilarity(item.titleUa, title),
+                                titleSimilarity(item.titleUa, origTitle)
+                            );
+                            if (score > bestScore) { bestScore = score; best = item; }
+                        });
+                        if (best) {
+                            loadContent(provider, provider.url + '/anime/' + best.id);
+                        } else {
+                            comp.empty(
+                                Lampa.Lang.translate('online_query_start') + ' (' + title + ') ' +
+                                Lampa.Lang.translate('online_query_end')
+                            );
+                        }
+                    },
+                    function (a, c) { comp.empty(network.errorDecode(a, c)); },
+                    null
+                );
+                return;
+            }
+
+            // ── Generic HTML search ──
+            var searchUrl = provider.url + provider.searchPath;
+            var isGet     = provider.searchMethod === 'get';
+            if (isGet) {
+                searchUrl += '?do=search&subaction=search&search_start=0&story=' + encodeURIComponent(title);
+            }
+
             network.native(
-                prox(BASE_URL + '/ua/'),
+                prox(searchUrl),
                 function (html) {
                     var doc   = (new DOMParser()).parseFromString(html, 'text/html');
-                    var items = doc.querySelectorAll('div.movie-item.short-item');
+                    var items = doc.querySelectorAll(provider.searchSelector);
                     var best  = null;
                     var bestScore = -1;
 
                     for (var i = 0; i < items.length; i++) {
                         var el     = items[i];
-                        var linkEl = el.querySelector('a.movie-title, a.full-movie');
-                        if (!linkEl) continue;
+                        var linkEl = el.querySelector(provider.searchLink);
+                        if (!linkEl) {
+                            // element itself might be the link
+                            if (el.matches && el.matches(provider.searchLink)) linkEl = el;
+                            else continue;
+                        }
                         var href = linkEl.getAttribute('href') || '';
-                        if (BLACKLIST.test(href)) continue;
-                        var itemTitle = (linkEl.textContent || '').trim();
+                        if (provider.blacklist && provider.blacklist.test(href)) continue;
+                        var itemTitle = (linkEl.getAttribute('title') || linkEl.textContent || '').trim();
                         var score = Math.max(
                             titleSimilarity(itemTitle, title),
                             titleSimilarity(itemTitle, origTitle)
@@ -277,7 +463,9 @@
                     }
 
                     if (best) {
-                        loadContent(best);
+                        // Make absolute if relative
+                        if (best.indexOf('http') !== 0) best = provider.url + best;
+                        loadContent(provider, best);
                     } else {
                         comp.empty(
                             Lampa.Lang.translate('online_query_start') + ' (' + title + ') ' +
@@ -286,48 +474,57 @@
                     }
                 },
                 function (a, c) { comp.empty(network.errorDecode(a, c)); },
-                { do: 'search', subaction: 'search', story: title.replace(/ /g, '+') },
+                isGet ? null : { do: 'search', subaction: 'search', story: title.replace(/ /g, '+') },
                 { dataType: 'text' }
             );
         }
 
-        function loadContent(movieUrl) {
-            // Extract news_id: last path segment, digits before first '-'
-            var segments = movieUrl.replace(/\.html$/, '').split('/');
-            var lastSeg  = segments[segments.length - 1] || '';
-            var newsId   = lastSeg.split('-')[0];
-
-            if (!newsId || isNaN(parseInt(newsId, 10))) {
-                // Fallback to movie mode
-                loadMovie(movieUrl);
+        function loadContent(provider, movieUrl) {
+            if (provider.engine === 'animeon') {
+                var animeId = movieUrl.replace(/\.html$/, '').split('/').pop().split('-')[0];
+                loadAnimeONSeries(provider, animeId);
                 return;
             }
 
-            var apiUrl = BASE_URL + '/engine/ajax/playlists.php?news_id=' + newsId +
-                         '&xfield=playlist&time=' + Date.now();
+            if (provider.engine === 'dle') {
+                // Extract news_id: last path segment, digits before first '-'
+                var segments = movieUrl.replace(/\.html$/, '').split('/');
+                var lastSeg  = segments[segments.length - 1] || '';
+                var newsId   = lastSeg.split('-')[0];
 
-            network.clear();
-            network.timeout(15000);
+                if (!newsId || isNaN(parseInt(newsId, 10))) {
+                    loadMoviePage(provider, movieUrl);
+                    return;
+                }
 
-            network.native(
-                prox(apiUrl),
-                function (json) {
-                    if (json && json.success && json.response) {
-                        loadSeries(json.response);
-                    } else {
-                        loadMovie(movieUrl);
-                    }
-                },
-                function () { loadMovie(movieUrl); },
-                null,
-                { headers: { 'Referer': BASE_URL, 'X-Requested-With': 'XMLHttpRequest' } }
-            );
+                var apiUrl = provider.url + '/engine/ajax/playlists.php?news_id=' + newsId +
+                             '&xfield=playlist&time=' + Date.now();
+
+                network.clear();
+                network.timeout(15000);
+                network.native(
+                    prox(apiUrl),
+                    function (json) {
+                        if (json && json.success && json.response) {
+                            loadSeries(json.response);
+                        } else {
+                            loadMoviePage(provider, movieUrl);
+                        }
+                    },
+                    function () { loadMoviePage(provider, movieUrl); },
+                    null,
+                    { headers: { 'Referer': provider.url, 'X-Requested-With': 'XMLHttpRequest' } }
+                );
+                return;
+            }
+
+            // iframe engine
+            loadMoviePage(provider, movieUrl);
         }
 
         function loadSeries(htmlResponse) {
             var doc = (new DOMParser()).parseFromString(htmlResponse, 'text/html');
 
-            // Collect season labels from the players section
             var seasonLabels = {};
             var playerLis = doc.querySelectorAll('.playlists-players li[data-id]:not([data-file]):not([data-voice])');
             playerLis.forEach(function(li) {
@@ -350,7 +547,7 @@
                 var seasonId  = (li.getAttribute('data-id') || '').trim();
 
                 if (!playerUrl) continue;
-                if (!playerUrl.startsWith('http')) playerUrl = 'https:' + playerUrl;
+                if (playerUrl.indexOf('http') !== 0) playerUrl = 'https:' + playerUrl;
 
                 if (!(voiceName in voiceMap)) {
                     voiceMap[voiceName] = filter_items.voice.length;
@@ -369,22 +566,19 @@
                     voice:        voiceName,
                     voice_index:  voiceMap[voiceName],
                     season_id:    seasonId || null,
-                    playerjs_url: playerUrl
+                    playerjs_url: playerUrl,
+                    m3u8:         null,
+                    subtitle:     null
                 });
             }
 
-            if (results.length === 0) {
-                comp.empty('Епізоди не знайдено');
-                return;
-            }
+            if (results.length === 0) { comp.empty('Епізоди не знайдено'); return; }
 
-            // Restore saved voice
             if (choice.voice_name) {
                 var inx = filter_items.voice.indexOf(choice.voice_name);
                 choice.voice = inx >= 0 ? inx : 0;
             }
 
-            // Restore saved season
             if (choice.season_id !== null) {
                 var sinx = filter_items.season_ids.indexOf(choice.season_id);
                 choice.season = sinx >= 0 ? sinx : 0;
@@ -396,44 +590,219 @@
             comp.loading(false);
         }
 
-        function loadMovie(movieUrl) {
+        function loadMoviePage(provider, movieUrl) {
             network.clear();
             network.timeout(15000);
 
             network.native(
                 prox(movieUrl),
                 function (html) {
-                    var doc       = (new DOMParser()).parseFromString(html, 'text/html');
-                    var iframe    = doc.querySelector('iframe#pre');
-                    var iframeSrc = iframe && (iframe.getAttribute('data-src') || iframe.getAttribute('src'));
+                    var doc = (new DOMParser()).parseFromString(html, 'text/html');
+                    var sel = provider.engine === 'dle' ? 'iframe#pre' : (provider.iframeSelector || 'iframe');
+                    var iframeEl = doc.querySelector(sel);
+                    var iframeSrc = iframeEl && (iframeEl.getAttribute('data-src') || iframeEl.getAttribute('src'));
 
                     if (!iframeSrc) {
                         comp.empty('Відео не знайдено на сторінці');
                         return;
                     }
 
-                    extractPlayerJs(iframeSrc, function (extra) {
-                        if (!extra || !extra.file) {
-                            comp.empty('Не вдалося отримати M3U8 посилання');
-                            return;
-                        }
-                        results = [{
-                            title:        object.movie.title || object.movie.name || 'Movie',
-                            voice:        '',
-                            voice_index:  0,
-                            playerjs_url: iframeSrc,
-                            m3u8:         extra.file,
-                            subtitle:     extra.subtitle
-                        }];
-                        filter_items = { voice: [], season: [], season_ids: [] };
-                        renderFilter();
-                        appendItems(results);
-                        comp.loading(false);
-                    });
+                    if (provider.engine === 'dle') {
+                        extractPlayerJs(iframeSrc, function (extra) {
+                            if (!extra || !extra.file) {
+                                comp.empty('Не вдалося отримати M3U8 посилання');
+                                return;
+                            }
+                            results = [{
+                                title:        object.movie.title || object.movie.name || 'Movie',
+                                voice:        '',
+                                voice_index:  0,
+                                playerjs_url: iframeSrc,
+                                m3u8:         extra.file,
+                                subtitle:     extra.subtitle
+                            }];
+                            filter_items = { voice: [], season: [], season_ids: [] };
+                            renderFilter();
+                            appendItems(results);
+                            comp.loading(false);
+                        });
+                    } else {
+                        loadSeriesFromIframe(provider, iframeSrc);
+                    }
                 },
                 function (a, c) { comp.empty(network.errorDecode(a, c)); },
                 null,
                 { dataType: 'text' }
+            );
+        }
+
+        function loadSeriesFromIframe(provider, iframeSrc) {
+            if (iframeSrc.indexOf('http') !== 0) iframeSrc = 'https:' + iframeSrc;
+            var net2 = new Lampa.Reguest();
+            net2.timeout(15000);
+            net2.native(
+                prox(iframeSrc),
+                function (html) {
+                    var fm = html.match(/file\s*:\s*'([^']+?)'/) || html.match(/file\s*:\s*"([^"]+?)"/);
+                    if (!fm) { comp.empty('Плеєр не знайдено'); return; }
+
+                    var fileData = fm[1];
+                    if (provider.obfuscated) {
+                        try { fileData = atob(fileData).split('').reverse().join(''); }
+                        catch (e) { comp.empty('Помилка декодування'); return; }
+                    }
+
+                    var data;
+                    try {
+                        data = JSON.parse(fileData);
+                    } catch (e) {
+                        if (fileData.indexOf('.m3u8') !== -1 || fileData.indexOf('.mp4') !== -1) {
+                            data = [{ title: object.movie.title || 'Movie', file: fileData }];
+                        } else {
+                            comp.empty('Помилка парсингу'); return;
+                        }
+                    }
+
+                    var episodes = parsePlayerJson(data);
+                    if (!episodes.length) { comp.empty('Епізоди не знайдено'); return; }
+
+                    results      = [];
+                    filter_items = { voice: [], season: [], season_ids: [] };
+                    var voiceMap  = {};
+                    var seasonMap = {};
+
+                    episodes.forEach(function(ep) {
+                        var vn = ep.voice || '';
+                        var sn = ep.season_name || null;
+
+                        if (!(vn in voiceMap)) {
+                            voiceMap[vn] = filter_items.voice.length;
+                            filter_items.voice.push(vn);
+                        }
+
+                        if (sn && !(sn in seasonMap)) {
+                            seasonMap[sn] = filter_items.season.length;
+                            filter_items.season.push(sn);
+                            filter_items.season_ids.push(sn);
+                        }
+
+                        results.push({
+                            title:       ep.title,
+                            voice:       vn,
+                            voice_index: voiceMap[vn],
+                            season_id:   sn,
+                            m3u8:        ep.m3u8,
+                            subtitle:    ep.subtitle || null,
+                            playerjs_url: null,
+                            animeon_episode_url: null
+                        });
+                    });
+
+                    // Restore saved voice/season
+                    if (choice.voice_name) {
+                        var inx = filter_items.voice.indexOf(choice.voice_name);
+                        choice.voice = inx >= 0 ? inx : 0;
+                    }
+                    if (choice.season_id !== null) {
+                        var sinx = filter_items.season_ids.indexOf(choice.season_id);
+                        choice.season = sinx >= 0 ? sinx : 0;
+                        if (sinx < 0) choice.season_id = filter_items.season_ids[0] || null;
+                    }
+
+                    renderFilter();
+                    appendItems(filtered());
+                    comp.loading(false);
+                },
+                function () { comp.empty('Помилка завантаження'); },
+                null,
+                { dataType: 'text' }
+            );
+        }
+
+        function loadAnimeONSeries(provider, animeId) {
+            network.clear();
+            network.timeout(15000);
+            network.native(
+                prox(provider.url + '/api/player/fundubs/' + animeId),
+                function (json) {
+                    var fundubs = json || [];
+                    if (!fundubs.length) { comp.empty('Аніме не знайдено'); return; }
+
+                    results      = [];
+                    filter_items = { voice: [], season: [], season_ids: [] };
+                    var voiceMap = {};
+                    var pending  = fundubs.length;
+
+                    fundubs.forEach(function(dub) {
+                        var dubName  = dub.fundub.name;
+                        var playerId = dub.player[0] && dub.player[0].id;
+                        var fundubId = dub.fundub.id;
+                        var epUrl    = provider.url + '/api/player/episodes/' + animeId +
+                                       '?playerId=' + playerId + '&fundubId=' + fundubId;
+                        var net3 = new Lampa.Reguest();
+                        net3.timeout(15000);
+                        net3.native(
+                            prox(epUrl),
+                            function (epJson) {
+                                var episodes = (epJson && epJson.episodes) || [];
+                                if (!(dubName in voiceMap)) {
+                                    voiceMap[dubName] = filter_items.voice.length;
+                                    filter_items.voice.push(dubName);
+                                }
+                                episodes.forEach(function(ep) {
+                                    results.push({
+                                        title:               'Серія ' + ep.episode,
+                                        voice:               dubName,
+                                        voice_index:         voiceMap[dubName],
+                                        season_id:           null,
+                                        animeon_episode_url: provider.url + '/api/player/episode/' + ep.id,
+                                        playerjs_url:        null,
+                                        m3u8:                null,
+                                        subtitle:            null
+                                    });
+                                });
+                                if (--pending === 0) finalize();
+                            },
+                            function () { if (--pending === 0) finalize(); },
+                            null
+                        );
+                    });
+
+                    function finalize() {
+                        results.sort(function(a, b) {
+                            if (a.voice_index !== b.voice_index) return a.voice_index - b.voice_index;
+                            return parseInt(a.title.replace('Серія ', ''), 10) -
+                                   parseInt(b.title.replace('Серія ', ''), 10);
+                        });
+                        if (!results.length) { comp.empty('Епізоди не знайдено'); return; }
+
+                        if (choice.voice_name) {
+                            var inx = filter_items.voice.indexOf(choice.voice_name);
+                            choice.voice = inx >= 0 ? inx : 0;
+                        }
+
+                        renderFilter();
+                        appendItems(filtered());
+                        comp.loading(false);
+                    }
+                },
+                function (a, c) { comp.empty(network.errorDecode(a, c)); },
+                null
+            );
+        }
+
+        function extractAnimeONVideo(episodeApiUrl, callback) {
+            var net2 = new Lampa.Reguest();
+            net2.timeout(15000);
+            net2.native(
+                prox(episodeApiUrl),
+                function (json) {
+                    var videoUrl = json && json.videoUrl;
+                    if (!videoUrl) { callback(null); return; }
+                    extractPlayerJs(videoUrl, callback);
+                },
+                function () { callback(null); },
+                null
             );
         }
 
@@ -474,7 +843,8 @@
 
         function saveChoice() {
             var data = Lampa.Storage.cache('online_choice_uakino', 500, {});
-            data[object.movie.id] = {
+            var key  = (object.movie.id || '') + '_' + current_provider.id;
+            data[key] = {
                 voice: choice.voice, voice_name: choice.voice_name,
                 season: choice.season, season_id: choice.season_id
             };
@@ -529,10 +899,10 @@
 
                             var playlist = filtered().map(function (e2) {
                                 return {
-                                    title:     e2.title,
-                                    url:       e2.m3u8 || null,
-                                    timeline:  e2.timeline,
-                                    playerjs:  e2.playerjs_url
+                                    title:    e2.title,
+                                    url:      e2.m3u8 || null,
+                                    timeline: e2.timeline,
+                                    playerjs: e2.playerjs_url
                                 };
                             });
 
@@ -549,7 +919,9 @@
                             }
                         }
 
-                        if (ep.m3u8) {
+                        if (ep.animeon_episode_url) {
+                            extractAnimeONVideo(ep.animeon_episode_url, doPlay);
+                        } else if (ep.m3u8) {
                             doPlay({ file: ep.m3u8, subtitle: ep.subtitle });
                         } else {
                             extractPlayerJs(ep.playerjs_url, doPlay);
@@ -571,7 +943,7 @@
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style="width:1em;height:1em;vertical-align:middle">' +
         '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z" fill="currentColor"/>' +
         '</svg>' +
-        '<span>Uakino</span>' +
+        '<span>UA Онлайн</span>' +
         '</div>';
 
     function addButton(e) {
@@ -580,7 +952,7 @@
         btn.on('hover:enter', function () {
             Lampa.Activity.push({
                 url:       '',
-                title:     'Uakino',
+                title:     'UA Онлайн',
                 component: 'uakino',
                 movie:     e.data.movie,
                 page:      1
@@ -590,8 +962,6 @@
     }
 
     // ── Settings ──────────────────────────────────────────────────────────────
-    // Mirrors the online.js pattern: inject a folder into Settings main page,
-    // register a settings_uakino template with a text input for the proxy URL.
 
     function addSettings() {
         Lampa.Params.select('uakino_proxy', '', '');
@@ -599,7 +969,7 @@
         Lampa.Template.add('settings_uakino',
             '<div>' +
             '<div class="settings-param selector" data-type="input" data-name="uakino_proxy" placeholder="https://cors-proxy.example.com/">' +
-                '<div class="settings-param__name">Uakino Proxy URL</div>' +
+                '<div class="settings-param__name">UA Онлайн Proxy URL</div>' +
                 '<div class="settings-param__value"></div>' +
                 '<div class="settings-param__descr">CORS proxy for browser/web use. Leave empty on Android TV.</div>' +
             '</div>' +
@@ -614,7 +984,7 @@
                 '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z" fill="currentColor"/>' +
                 '</svg>' +
                 '</div>' +
-                '<div class="settings-folder__name">Uakino</div>' +
+                '<div class="settings-folder__name">UA Онлайн</div>' +
                 '</div>'
             );
             Lampa.Settings.main().render().find('[data-component="more"]').after(folder);
