@@ -62,8 +62,8 @@
         var fltr    = new Lampa.Filter(object);
 
         var results      = [];
-        var filter_items = { voice: [] };
-        var choice       = { voice: 0, voice_name: '' };
+        var filter_items = { voice: [], season: [], season_ids: [] };
+        var choice       = { voice: 0, voice_name: '', season: 0, season_id: null };
         var last;
         var last_filter;
         var comp = this;
@@ -94,7 +94,8 @@
                     appendItems(filtered());
                 } else {
                     choice[a.stype] = b.index;
-                    if (a.stype === 'voice') choice.voice_name = filter_items.voice[b.index];
+                    if (a.stype === 'voice')  choice.voice_name = filter_items.voice[b.index];
+                    if (a.stype === 'season') choice.season_id  = filter_items.season_ids[b.index];
                     comp.reset();
                     renderFilter();
                     appendItems(filtered());
@@ -210,6 +211,18 @@
                 });
             }
 
+            if (fi.season && fi.season.length > 1) {
+                var seasonItems = fi.season.map(function (name, i) {
+                    return { title: name, selected: i === ch.season, index: i };
+                });
+                select.push({
+                    title:    Lampa.Lang.translate('torrent_serial_season'),
+                    subtitle: fi.season[ch.season],
+                    stype:    'season',
+                    items:    seasonItems
+                });
+            }
+
             Lampa.Storage.set('online_filter', ch);
             fltr.set('filter', select);
             comp.selected(fi);
@@ -219,6 +232,9 @@
             var sel = [];
             if (fi.voice && fi.voice.length > 1) {
                 sel.push(Lampa.Lang.translate('torrent_parser_voice') + ': ' + fi.voice[choice.voice]);
+            }
+            if (fi.season && fi.season.length > 1) {
+                sel.push(Lampa.Lang.translate('torrent_serial_season') + ': ' + fi.season[choice.season]);
             }
             fltr.chosen('filter', sel);
         };
@@ -310,17 +326,28 @@
 
         function loadSeries(htmlResponse) {
             var doc = (new DOMParser()).parseFromString(htmlResponse, 'text/html');
+
+            // Collect season labels from the players section
+            var seasonLabels = {};
+            var playerLis = doc.querySelectorAll('.playlists-players li[data-id]:not([data-file]):not([data-voice])');
+            playerLis.forEach(function(li) {
+                var sid = li.getAttribute('data-id');
+                if (sid) seasonLabels[sid] = li.textContent.trim();
+            });
+
             var lis = doc.querySelectorAll('div.playlists-videos li');
 
             results      = [];
-            filter_items = { voice: [] };
-            var voiceMap = {};
+            filter_items = { voice: [], season: [], season_ids: [] };
+            var voiceMap  = {};
+            var seasonMap = {};
 
             for (var i = 0; i < lis.length; i++) {
                 var li        = lis[i];
                 var playerUrl = (li.getAttribute('data-file') || '').trim();
                 var voiceName = (li.getAttribute('data-voice') || '').trim();
                 var epTitle   = (li.textContent || '').trim();
+                var seasonId  = (li.getAttribute('data-id') || '').trim();
 
                 if (!playerUrl) continue;
                 if (!playerUrl.startsWith('http')) playerUrl = 'https:' + playerUrl;
@@ -329,10 +356,19 @@
                     voiceMap[voiceName] = filter_items.voice.length;
                     filter_items.voice.push(voiceName);
                 }
+
+                if (seasonId && !(seasonId in seasonMap)) {
+                    seasonMap[seasonId] = filter_items.season.length;
+                    var label = seasonLabels[seasonId] || (Lampa.Lang.translate('torrent_serial_season') + ' ' + seasonId);
+                    filter_items.season.push(label);
+                    filter_items.season_ids.push(seasonId);
+                }
+
                 results.push({
-                    title:       epTitle,
-                    voice:       voiceName,
-                    voice_index: voiceMap[voiceName],
+                    title:        epTitle,
+                    voice:        voiceName,
+                    voice_index:  voiceMap[voiceName],
+                    season_id:    seasonId || null,
                     playerjs_url: playerUrl
                 });
             }
@@ -346,6 +382,13 @@
             if (choice.voice_name) {
                 var inx = filter_items.voice.indexOf(choice.voice_name);
                 choice.voice = inx >= 0 ? inx : 0;
+            }
+
+            // Restore saved season
+            if (choice.season_id !== null) {
+                var sinx = filter_items.season_ids.indexOf(choice.season_id);
+                choice.season = sinx >= 0 ? sinx : 0;
+                if (sinx < 0) choice.season_id = filter_items.season_ids[0] || null;
             }
 
             renderFilter();
@@ -382,7 +425,7 @@
                             m3u8:         extra.file,
                             subtitle:     extra.subtitle
                         }];
-                        filter_items = { voice: [] };
+                        filter_items = { voice: [], season: [], season_ids: [] };
                         renderFilter();
                         appendItems(results);
                         comp.loading(false);
@@ -418,9 +461,10 @@
         }
 
         function filtered() {
-            if (!filter_items.voice.length) return results;
             return results.filter(function (ep) {
-                return ep.voice_index === choice.voice;
+                var voiceOk  = !filter_items.voice.length  || ep.voice_index === choice.voice;
+                var seasonOk = !filter_items.season.length || ep.season_id === filter_items.season_ids[choice.season];
+                return voiceOk && seasonOk;
             });
         }
 
@@ -430,7 +474,10 @@
 
         function saveChoice() {
             var data = Lampa.Storage.cache('online_choice_uakino', 500, {});
-            data[object.movie.id] = { voice: choice.voice, voice_name: choice.voice_name };
+            data[object.movie.id] = {
+                voice: choice.voice, voice_name: choice.voice_name,
+                season: choice.season, season_id: choice.season_id
+            };
             Lampa.Storage.set('online_choice_uakino', data);
         }
 
@@ -447,7 +494,7 @@
                 var item = Lampa.Template.get('online', {
                     title:   episode.title,
                     quality: '',
-                    info:    episode.voice ? ' / ' + Lampa.Utils.shortText(episode.voice, 50) : ''
+                    info:    ''
                 });
 
                 item.addClass('video--stream');
