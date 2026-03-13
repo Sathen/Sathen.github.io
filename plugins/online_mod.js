@@ -414,20 +414,19 @@
                     prox(animeSearchUrl),
                     function (json) {
                         var best = null, bestScore = -1;
-                        (json.result || []).forEach(function(item) {
+                        (json.result || json || []).forEach(function(item) {
                             var score = Math.max(
                                 titleSimilarity(item.titleUa, title),
-                                titleSimilarity(item.titleUa, origTitle)
+                                titleSimilarity(item.titleUa, origTitle),
+                                titleSimilarity(item.titleEn, title),
+                                titleSimilarity(item.titleEn, origTitle)
                             );
                             if (score > bestScore) { bestScore = score; best = item; }
                         });
                         if (best) {
-                            loadContent(provider, provider.url + '/anime/' + best.id);
+                            loadAnimeONSeries(provider, best.id);
                         } else {
-                            comp.empty(
-                                Lampa.Lang.translate('online_query_start') + ' (' + title + ') ' +
-                                Lampa.Lang.translate('online_query_end')
-                            );
+                            comp.empty('Не знайдено: ' + title);
                         }
                     },
                     function (a, c) { comp.empty(network.errorDecode(a, c)); },
@@ -487,12 +486,6 @@
         }
 
         function loadContent(provider, movieUrl) {
-            if (provider.engine === 'animeon') {
-                var animeId = movieUrl.replace(/\.html$/, '').split('/').pop().split('-')[0];
-                loadAnimeONSeries(provider, animeId);
-                return;
-            }
-
             if (provider.engine === 'dle') {
                 // Extract news_id: last path segment, digits before first '-'
                 var segments = movieUrl.replace(/\.html$/, '').split('/');
@@ -793,7 +786,10 @@
                         comp.loading(false);
                     }
                 },
-                function (a, c) { comp.empty(network.errorDecode(a, c)); },
+                function (a, c) {
+                    var msg = network.errorDecode(a, c);
+                    comp.empty('AnimeON: ' + (msg || 'помилка сервера'));
+                },
                 null
             );
         }
