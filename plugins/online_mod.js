@@ -105,17 +105,53 @@
         return p + url;
     }
 
-    // ── Template fallback ─────────────────────────────────────────────────────
+    // ── Templates + CSS ──────────────────────────────────────────────────────
 
     function ensureTemplates() {
-        try { Lampa.Template.get('online', {}); }
+        // Prestige card — register only if not already available (e.g. from BanderaOnline)
+        try { Lampa.Template.get('bandera_online_full', { title:'', info:'', quality:'', time:'' }); }
         catch (e) {
-            Lampa.Template.add('online',
-                '<div class="online selector">' +
-                '<div class="online__body">' +
-                '<div class="online__title">{title}</div>' +
-                '<div class="online__quality">{quality}{info}</div>' +
-                '</div></div>'
+            Lampa.Template.add('bandera_online_full',
+                '<div class="online-prestige online-prestige--full selector">' +
+                '<div class="online-prestige__img"><img alt=""><div class="online-prestige__loader"></div></div>' +
+                '<div class="online-prestige__body">' +
+                '<div class="online-prestige__head">' +
+                '<div class="online-prestige__title">{title}</div>' +
+                '<div class="online-prestige__time">{time}</div>' +
+                '</div>' +
+                '<div class="online-prestige__timeline"></div>' +
+                '<div class="online-prestige__footer">' +
+                '<div class="online-prestige__info">{info}</div>' +
+                '<div class="online-prestige__quality">{quality}</div>' +
+                '</div></div></div>'
+            );
+        }
+
+        // Inject CSS once (skipped if BanderaOnline already did it)
+        if (!$('#ua-online-css').length) {
+            $('body').append('<style id="ua-online-css">' +
+                '.online-prestige{position:relative;border-radius:.3em;background:rgba(0,0,0,.3);display:flex}' +
+                '.online-prestige__body{padding:1.2em;line-height:1.3;flex-grow:1;position:relative}' +
+                '.online-prestige__img{position:relative;width:13em;flex-shrink:0;min-height:8.2em}' +
+                '.online-prestige__img>img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;border-radius:.3em;opacity:0;transition:opacity .3s}' +
+                '.online-prestige__img--loaded>img{opacity:1}' +
+                '.online-prestige__episode-number{position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;font-size:2em}' +
+                '.online-prestige__loader{position:absolute;top:50%;left:50%;width:2em;height:2em;margin-left:-1em;margin-top:-1em;background:url(./img/loader.svg) no-repeat center;background-size:contain}' +
+                '.online-prestige__viewed{position:absolute;top:.6em;left:.6em;background:rgba(0,0,0,.45);border-radius:100%;padding:.25em;font-size:.76em}' +
+                '.online-prestige__viewed>svg{width:1.5em!important;height:1.5em!important}' +
+                '.online-prestige__head,.online-prestige__footer{display:flex;justify-content:space-between;align-items:center}' +
+                '.online-prestige__timeline{margin:.8em 0}' +
+                '.online-prestige__timeline>.time-line{display:block!important}' +
+                '.online-prestige__title{font-size:1.7em;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}' +
+                '.online-prestige__time{padding-left:2em;white-space:nowrap}' +
+                '.online-prestige__info{display:flex;align-items:center}' +
+                '.online-prestige__info>*{overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}' +
+                '.online-prestige__quality{padding-left:1em;white-space:nowrap}' +
+                '.online-prestige-split{font-size:.8em;margin:0 .8em;flex-shrink:0}' +
+                '.online-prestige.focus::after{content:"";position:absolute;top:-.6em;left:-.6em;right:-.6em;bottom:-.6em;border-radius:.7em;border:solid .3em #fff;z-index:-1;pointer-events:none}' +
+                '.online-prestige+.online-prestige{margin-top:1.5em}' +
+                '@media(max-width:480px){.online-prestige__img{width:7em;min-height:6em}.online-prestige__body{padding:.8em 1.2em}.online-prestige__title{font-size:1.4em}}' +
+                '</style>'
             );
         }
     }
@@ -192,7 +228,7 @@
     function UakinoComponent(object) {
         var network = new Lampa.Reguest();
         var scroll  = new Lampa.Scroll({ mask: true, over: true });
-        var files   = new Lampa.Files(object);
+        var files   = new Lampa.Explorer(object);
         var fltr    = new Lampa.Filter(object);
 
         var results      = [];
@@ -202,11 +238,6 @@
         var last_filter;
         var comp = this;
 
-        function minus() {
-            scroll.minus(window.innerWidth > 580 ? false : files.render().find('.files__left'));
-        }
-        window.addEventListener('resize', minus, false);
-        minus();
         scroll.body().addClass('torrent-list');
 
         // ── Public Lampa component interface ─────────────────────────────────
@@ -247,8 +278,9 @@
                 }
             };
 
-            files.append(scroll.render());
-            scroll.append(fltr.render());
+            files.appendFiles(scroll.render());
+            files.appendHead(fltr.render());
+            scroll.minus(files.render().find('.explorer__files-head'));
             doSearch();
             return this.render();
         };
@@ -304,23 +336,12 @@
             files.destroy();
             scroll.destroy();
             network = null;
-            window.removeEventListener('resize', minus);
         };
 
         this.reset = function () {
             last = false;
             scroll.render().find('.empty').remove();
-            fltr.render().detach();
             scroll.clear();
-            scroll.append(fltr.render());
-        };
-
-        this.append = function (item) {
-            item.on('hover:focus', function (e) {
-                last = e.target;
-                scroll.update($(e.target), true);
-            });
-            scroll.append(item);
         };
 
         this.loading = function (status) {
@@ -889,34 +910,83 @@
 
         function appendItems(items) {
             comp.reset();
-            var viewed = Lampa.Storage.cache('online_view', 5000, []);
+            var viewed         = Lampa.Storage.cache('online_view', 5000, []);
+            var scroll_to_el   = false;
+            var scroll_to_mark = false;
+            var backdropPath   = object.movie.backdrop_path || object.movie.poster_path || '';
 
-            items.forEach(function (episode) {
+            items.forEach(function (episode, index) {
                 var hashBase  = [episode.title, object.movie.original_title || object.movie.title, episode.voice].join('');
                 var hash      = Lampa.Utils.hash(hashBase);
-                var view      = Lampa.Timeline.view(hash);
                 var hash_file = Lampa.Utils.hash(hashBase + 'uakino');
+                var view      = Lampa.Timeline.view(hash);
+                episode.timeline = view;
 
-                var item = Lampa.Template.get('online', {
+                // Episode number overlay (01, 02, …)
+                var epNumStr = (function () {
+                    var m = episode.title.match(/(\d+)/);
+                    var n = m ? parseInt(m[1], 10) : (index + 1);
+                    return n < 10 ? '0' + n : String(n);
+                })();
+
+                // Info line: voice [/ season]
+                var infoParts = [];
+                if (episode.voice) infoParts.push(episode.voice);
+                if (episode.season_id) infoParts.push(episode.season_id);
+                var infoHtml = infoParts.map(function (p, i) {
+                    return (i > 0 ? '<span class="online-prestige-split">/</span>' : '') +
+                           '<span>' + p.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</span>';
+                }).join('');
+
+                var html = Lampa.Template.get('bandera_online_full', {
                     title:   episode.title,
+                    info:    infoHtml,
                     quality: '',
-                    info:    ''
+                    time:    ''
                 });
 
-                item.addClass('video--stream');
-                episode.timeline = view;
-                item.append(Lampa.Timeline.render(view));
+                // Image thumbnail (movie backdrop) + episode number overlay
+                var imgWrap = html.find('.online-prestige__img');
+                imgWrap.append('<div class="online-prestige__episode-number">' + epNumStr + '</div>');
+                if (backdropPath) {
+                    var imgEl = html.find('.online-prestige__img img')[0];
+                    if (imgEl) {
+                        imgEl.onload  = function () { imgWrap.addClass('online-prestige__img--loaded'); imgWrap.find('.online-prestige__loader').remove(); };
+                        imgEl.onerror = function () { imgWrap.find('.online-prestige__loader').remove(); };
+                        imgEl.src = Lampa.TMDB.image('t/p/w300' + backdropPath);
+                    }
+                } else {
+                    imgWrap.find('.online-prestige__loader').remove();
+                }
 
+                // Timeline bar
+                if (Lampa.Timeline.render) {
+                    html.find('.online-prestige__timeline').append(Lampa.Timeline.render(view));
+                }
                 if (Lampa.Timeline.details) {
-                    item.find('.online__quality').append(Lampa.Timeline.details(view, ' / '));
+                    html.find('.online-prestige__quality').append(Lampa.Timeline.details(view, ' / '));
                 }
 
-                if (viewed.indexOf(hash_file) !== -1) {
-                    item.append('<div class="torrent-item__viewed">' +
-                        Lampa.Template.get('icon_star', {}, true) + '</div>');
+                // Viewed star
+                var isViewed = viewed.indexOf(hash_file) !== -1;
+                if (isViewed) {
+                    imgWrap.append('<div class="online-prestige__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
+                    if (!scroll_to_mark) scroll_to_mark = html;
                 }
 
-                item.on('hover:enter', (function (ep, v, hf) {
+                // Track last-in-progress episode for scroll-to
+                if (view && view.percent > 0 && view.percent < 90) {
+                    scroll_to_el = html;
+                }
+
+                // Focus: update scroll position
+                html.on('hover:focus', function (e) {
+                    last = e.target;
+                    scroll.update($(e.target), true);
+                });
+
+                // Enter: play
+                html.on('hover:enter', (function (ep, v, hf, card, iw) {
                     return function () {
                         if (object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
 
@@ -925,32 +995,19 @@
                                 Lampa.Noty.show('Не вдалося отримати посилання');
                                 return;
                             }
-
-                            var first = {
-                                url:      extra.file,
-                                timeline: v,
-                                title:    ep.title
-                            };
+                            var first = { url: extra.file, timeline: v, title: ep.title };
                             if (extra.subtitle) first.subtitles = extra.subtitle;
 
                             var playlist = filtered().map(function (e2) {
-                                return {
-                                    title:    e2.title,
-                                    url:      e2.m3u8 || null,
-                                    timeline: e2.timeline,
-                                    playerjs: e2.playerjs_url
-                                };
+                                return { title: e2.title, url: e2.m3u8 || null, timeline: e2.timeline, playerjs: e2.playerjs_url };
                             });
-
-                            if (playlist.length > 1) first.playlist = playlist;
 
                             Lampa.Player.play(first);
                             Lampa.Player.playlist(playlist.length > 1 ? playlist : [first]);
 
                             if (viewed.indexOf(hf) === -1) {
                                 viewed.push(hf);
-                                item.append('<div class="torrent-item__viewed">' +
-                                    Lampa.Template.get('icon_star', {}, true) + '</div>');
+                                iw.append('<div class="online-prestige__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
                                 Lampa.Storage.set('online_view', viewed);
                             }
                         }
@@ -963,10 +1020,14 @@
                             extractPlayerJs(ep.playerjs_url, doPlay);
                         }
                     };
-                })(episode, view, hash_file));
+                })(episode, view, hash_file, html, imgWrap));
 
-                comp.append(item);
+                scroll.append(html);
             });
+
+            // Scroll to last-in-progress or last-viewed
+            if (scroll_to_el)        last = scroll_to_el[0];
+            else if (scroll_to_mark) last = scroll_to_mark[0];
 
             comp.start(true);
         }
