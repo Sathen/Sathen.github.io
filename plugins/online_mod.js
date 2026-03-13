@@ -465,54 +465,75 @@
                 return;
             }
 
-            // ── Generic HTML search ──
-            var searchUrl = provider.url + provider.searchPath;
-            var isGet     = provider.searchMethod === 'get';
-            if (isGet) {
-                searchUrl += '?do=search&subaction=search&search_start=0&story=' + encodeURIComponent(title);
+            // ── Generic HTML search with fallback candidates ──
+            // Build search candidates: full title → non-CJK original → short title (before colon)
+            var isCJK = function (s) { return /[\u3000-\u9fff\uf900-\ufaff]/.test(s); };
+            var searchCandidates = (function () {
+                var seen = {}, list = [];
+                function add(s) {
+                    s = (s || '').trim();
+                    if (s && !seen[s]) { seen[s] = true; list.push(s); }
+                }
+                add(title);
+                if (!isCJK(origTitle)) add(origTitle);
+                add(title.replace(/\s*[:\-–—].*$/, ''));     // short localized
+                if (!isCJK(origTitle)) add(origTitle.replace(/\s*[:\-–—].*$/, ''));
+                return list;
+            })();
+
+            var isGet = provider.searchMethod === 'get';
+
+            function runSearch(idx) {
+                if (idx >= searchCandidates.length) {
+                    comp.empty('Не знайдено: ' + title);
+                    return;
+                }
+                var query = searchCandidates[idx];
+                var url   = provider.url + provider.searchPath;
+                if (isGet) url += '?do=search&subaction=search&search_start=0&story=' + encodeURIComponent(query);
+
+                network.native(
+                    prox(url),
+                    function (html) {
+                        var doc   = (new DOMParser()).parseFromString(html, 'text/html');
+                        var items = doc.querySelectorAll(provider.searchSelector);
+
+                        // No results from provider → try next candidate
+                        if (!items.length) { runSearch(idx + 1); return; }
+
+                        var best = null, bestScore = -1;
+                        for (var i = 0; i < items.length; i++) {
+                            var el     = items[i];
+                            var linkEl = el.querySelector(provider.searchLink);
+                            if (!linkEl) {
+                                if (el.matches && el.matches(provider.searchLink)) linkEl = el;
+                                else continue;
+                            }
+                            var href = linkEl.getAttribute('href') || '';
+                            if (provider.blacklist && provider.blacklist.test(href)) continue;
+                            var itemTitle = (linkEl.getAttribute('title') || linkEl.textContent || '').trim();
+                            var score = Math.max(
+                                titleSimilarity(itemTitle, title),
+                                titleSimilarity(itemTitle, origTitle),
+                                titleSimilarity(itemTitle, query)   // also score against the actual query used
+                            );
+                            if (score > bestScore) { bestScore = score; best = href; }
+                        }
+
+                        if (best) {
+                            if (best.indexOf('http') !== 0) best = provider.url + best;
+                            loadContent(provider, best);
+                        } else {
+                            runSearch(idx + 1);
+                        }
+                    },
+                    function (a, c) { comp.empty(network.errorDecode(a, c)); },
+                    isGet ? null : { do: 'search', subaction: 'search', story: query.replace(/ /g, '+') },
+                    { dataType: 'text' }
+                );
             }
 
-            network.native(
-                prox(searchUrl),
-                function (html) {
-                    var doc   = (new DOMParser()).parseFromString(html, 'text/html');
-                    var items = doc.querySelectorAll(provider.searchSelector);
-                    var best  = null;
-                    var bestScore = -1;
-
-                    for (var i = 0; i < items.length; i++) {
-                        var el     = items[i];
-                        var linkEl = el.querySelector(provider.searchLink);
-                        if (!linkEl) {
-                            // element itself might be the link
-                            if (el.matches && el.matches(provider.searchLink)) linkEl = el;
-                            else continue;
-                        }
-                        var href = linkEl.getAttribute('href') || '';
-                        if (provider.blacklist && provider.blacklist.test(href)) continue;
-                        var itemTitle = (linkEl.getAttribute('title') || linkEl.textContent || '').trim();
-                        var score = Math.max(
-                            titleSimilarity(itemTitle, title),
-                            titleSimilarity(itemTitle, origTitle)
-                        );
-                        if (score > bestScore) { bestScore = score; best = href; }
-                    }
-
-                    if (best) {
-                        // Make absolute if relative
-                        if (best.indexOf('http') !== 0) best = provider.url + best;
-                        loadContent(provider, best);
-                    } else {
-                        comp.empty(
-                            Lampa.Lang.translate('online_query_start') + ' (' + title + ') ' +
-                            Lampa.Lang.translate('online_query_end')
-                        );
-                    }
-                },
-                function (a, c) { comp.empty(network.errorDecode(a, c)); },
-                isGet ? null : { do: 'search', subaction: 'search', story: title.replace(/ /g, '+') },
-                { dataType: 'text' }
-            );
+            runSearch(0);
         }
 
         function loadContent(provider, movieUrl) {
