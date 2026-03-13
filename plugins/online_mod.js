@@ -80,6 +80,15 @@
             id: 'animeon',  name: 'AnimeON',
             url: 'https://animeon.club',
             engine: 'animeon'
+        },
+        {
+            id: 'anitube',  name: 'AniTube',
+            url: 'https://anitube.in.ua',
+            engine: 'dle',
+            userHash: true,
+            searchPath: '/',
+            searchSelector: 'article.story',
+            searchLink: '.story_c h2 a, div.text_content a'
         }
     ];
 
@@ -497,29 +506,51 @@
                     return;
                 }
 
-                var apiUrl = provider.url + '/engine/ajax/playlists.php?news_id=' + newsId +
-                             '&xfield=playlist&time=' + Date.now();
-
-                network.clear();
-                network.timeout(15000);
-                network.native(
-                    prox(apiUrl),
-                    function (json) {
-                        if (json && json.success && json.response) {
-                            loadSeries(json.response);
-                        } else {
-                            loadMoviePage(provider, movieUrl);
-                        }
-                    },
-                    function () { loadMoviePage(provider, movieUrl); },
-                    null,
-                    { headers: { 'Referer': provider.url, 'X-Requested-With': 'XMLHttpRequest' } }
-                );
+                if (provider.userHash) {
+                    // AniTube requires dle_login_hash from the page before calling the API
+                    network.clear();
+                    network.timeout(15000);
+                    network.native(
+                        prox(movieUrl),
+                        function (html) {
+                            var hm = html.match(/dle_login_hash\s*=\s*'([^']+)'/);
+                            var hash = hm ? hm[1] : '';
+                            var apiUrl = provider.url + '/engine/ajax/playlists.php?news_id=' + newsId +
+                                         '&xfield=playlist&user_hash=' + hash;
+                            callDlePlaylistApi(provider, apiUrl, movieUrl);
+                        },
+                        function (a, c) { comp.empty(network.errorDecode(a, c)); },
+                        null,
+                        { dataType: 'text' }
+                    );
+                } else {
+                    var apiUrl = provider.url + '/engine/ajax/playlists.php?news_id=' + newsId +
+                                 '&xfield=playlist&time=' + Date.now();
+                    callDlePlaylistApi(provider, apiUrl, movieUrl);
+                }
                 return;
             }
 
             // iframe engine
             loadMoviePage(provider, movieUrl);
+        }
+
+        function callDlePlaylistApi(provider, apiUrl, movieUrl) {
+            network.clear();
+            network.timeout(15000);
+            network.native(
+                prox(apiUrl),
+                function (json) {
+                    if (json && json.success && json.response) {
+                        loadSeries(json.response);
+                    } else {
+                        loadMoviePage(provider, movieUrl);
+                    }
+                },
+                function () { loadMoviePage(provider, movieUrl); },
+                null,
+                { headers: { 'Referer': provider.url, 'X-Requested-With': 'XMLHttpRequest' } }
+            );
         }
 
         function loadSeries(htmlResponse) {
